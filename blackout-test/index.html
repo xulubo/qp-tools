@@ -1,0 +1,255 @@
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+<script src="http://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.7.0/underscore-min.js"></script>
+<script src="js/bootstrap/js/bootstrap.min.js"></script>
+<script src="js/dropzone.js"></script>
+
+
+<!-- Bootstrap core CSS -->
+<link href="js/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+<!-- Bootstrap theme -->
+<link href="js/bootstrap/css/bootstrap-theme.min.css" rel="stylesheet">
+
+
+<style>
+
+.doc:hover {
+	box-shadow: 1px 1px 2px #666 inset;
+	background-color: #CCC;
+}
+
+.dz-clickable {
+	background-color: grey;
+}
+
+#doc-load {
+	width: 50px;
+	height: 50px;
+	background-color: grey;
+}
+
+#doc-zone {
+	width: 500px;
+	min-height: 700px;
+	background-color: #E0E0E0;
+	float: left;
+	border: 1px solid #333333;
+}
+
+#log-zone {
+	width: 500px;
+	height: 500px;
+	background-color: grey;
+	float: left;
+}
+#request {
+	width: 500px;
+	height: 495px;
+	background-color: white;
+	overflow: auto;
+	border: 1px solid #333333;
+}
+#response {
+	width: 500px;
+	height: 200px;
+	background-color: white;
+	margin-top: 5px;
+	border: 1px solid #333333;
+
+}
+
+#editor {
+	width: 500px;
+	height: 200px;
+	background-color: white;
+	margin-top: 5px;
+	border: 1px solid #333333;
+
+}
+
+</style>
+<div style="display:block">
+	<button id="deleteAll">Delete All</button> numFound: <span id="numFound"></span>
+</div>
+<div id="content" style="display:block">
+	<div id="doc-zone">
+	</div>
+	<div id="log-zone">
+		<div id="request">
+		</div>
+		<div id="response">
+		</div>
+	</div>
+</div>
+
+
+<script type="text/template" id="requestTemplate">
+<span style="white-space: pre-line"><%-type%> <%-url%> HTTP/1.1
+Content-Type: <%-contentType%>
+
+<%-data%>
+</span>
+</script>
+
+<script type="text/template" id="responseTemplate">
+<span style="white-space: pre-line">HTTP/1.1 <%-status%> <%-statusText%>
+<%-headers%>
+
+<%-responseText%>
+</span>
+</script>
+
+<script type="text/template" id="docTemplate">
+<li class="doc" id="<%-id%>">
+	<div>channelId: <span><%- channelId%></span></div>
+	<div>serviceName: <span><%- serviceName%></span></div>
+	<div>startTimeMS: <span><%- startTimeMS%></span></div>
+	<div>endTimeMS: <span><%- endTimeMS%></span></div>
+</li>
+</script>
+
+<script>
+$(function(){
+	var requestTemplate = _.template($("#requestTemplate").html());
+	var docTemplate = _.template($("#docTemplate").html());
+	var responseTemplate = _.template($("#responseTemplate").html());
+	var blackouts=[];
+
+	$("#doc-zone").dropzone({
+		url:"aaa",
+		dictDefaultMessage: "Upload File",
+		accept: function(file, done) {
+			var reader = new FileReader();
+			reader.onload = onFileLoaded;		   
+			reader.readAsText(file);
+			done("File Received");
+	  }
+	});
+	
+
+	function waitForFile() {
+
+	};
+	
+    function onFileLoaded(e) {
+		var docs = e.target.result;
+		requestLoad(docs);
+    };
+	
+	function requestDelete(id) {
+		var v = blackouts[id];
+		var url = "/blackout/schedules/" + v.channelId + "/delete?version=1.0&startTimeMS="+v.startTimeMS+"&endTimeMS=" + v.endTimeMS;
+
+		request({
+			url: url,
+			type: "DELETE",
+			contentType: "application/json",
+			success: function() {
+				loadFromSolr();
+			},
+			complete: showResponse
+		});
+	};
+	
+	function requestDeleteAll() {
+		request({
+			url: "/blackout/schedules/delete?version=1.0",
+			type: "DELETE",
+			contentType: "application/json",
+			success: function() {
+				loadFromSolr();
+			}
+		});
+	};
+	
+	function requestUpdate(doc) {
+		request({
+			url: "/schedules/load?version=1.0",
+			type: "POST",
+			data: lines,
+			contentType: "application/json",
+			complete: showResponse
+		});
+	};
+	
+	function requestLoad(docs) {
+		request({
+			url: "/blackout/schedules/load?version=1.0",
+			type: "POST",
+			data: docs,
+			contentType: "application/json",
+			success: function() {
+				loadFromSolr();
+			},
+			complete: showResponse
+		});
+	};
+	
+	function request(opts) {
+		$.ajax({
+			url: opts.url,
+			type: opts.type,
+			data: opts.data,
+			contentType: opts.contentType,
+			success: opts.success,
+			complete: showResponse
+		});
+		
+		if (!opts.data) {
+			opts.data="";
+		}
+		$("#request").html(requestTemplate(opts));
+
+	};
+	
+	function showResponse(xhr, status){
+		console.log(xhr);
+		xhr.headers = xhr.getAllResponseHeaders();
+		$("#response").html(responseTemplate(xhr));
+	};
+	
+	function loadFromSolr() {
+		var url = "/solr/BlackoutCollection/select?q=*:*&sort=id+asc&rows=8&wt=json&indent=true";
+		$.ajax({
+			url: url,
+			type: "GET",
+			dataType: "JSON",
+			success: function(data) {
+				$("#docs").empty();
+				$("#numFound").html(data.response.numFound);
+				blackouts = new Array();
+				if (data.response.numFound == 0) {
+					waitForFile();
+				}
+				else {
+					var docs = $("<ul id=\"docs\"> </ul>");
+					$.each(data.response.docs, function(k, v){
+						blackouts[v.id] = v;
+
+						var doc = docTemplate({
+							id: v.id,
+							channelId:v.channelId, 
+							startTimeMS:new Date(v.startTimeMS).toLocaleString(),
+							endTimeMS: new Date(v.endTimeMS).toLocaleString(),
+							serviceName: v.serviceName
+						});
+						docs.append(doc);
+					});
+					
+					$("#doc-zone").html(docs);
+					
+					$(".doc").click(function(e){
+						if (confirm("Delete it?")) {
+							requestDelete(this.id);
+						}
+					});
+				}
+			}
+		});
+	};
+	
+	$("#deleteAll").click(function(){
+		requestDeleteAll();
+	});
+	loadFromSolr();
+});
+</script>

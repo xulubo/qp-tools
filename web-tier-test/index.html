@@ -1,0 +1,233 @@
+<script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+<script src="//cdnjs.cloudflare.com/ajax/libs/underscore.js/1.7.0/underscore-min.js"></script>
+<!-- Bootstrap core CSS -->
+<link href="/lib/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+<!-- Bootstrap theme -->
+<link href="/lib/bootstrap/css/bootstrap-theme.min.css" rel="stylesheet">
+	
+<style>
+.panel {
+	float: left;
+	max-width: 800px;
+}
+
+.field_name {
+	display: inline;
+	width: 100px;
+	text-align: right;
+}
+
+.page {
+	margin: 20px 0 0 50px;
+}
+
+table {
+	font-size: 14px;
+}
+
+.text {
+	padding-left: 10px;
+}
+
+ul.list-group {
+	padding-left: 20px;
+	list-style: none;
+}
+
+.current {
+	font-weight: bold;
+	font-size: 18px;
+}
+
+.highlight {
+	background-color: yellow;
+}
+</style>
+
+<div class="page">
+	<div style="margin-bottom: 20px;">
+		<div>
+			<input type="text" id="term"> <button id="search">Search</button>
+			Page Size: <input type="text" id="pageSize" value="25" size="2">
+		</div>
+		CAS request: <a href="#" target="_blank" id="casLink"></a>
+	</div>
+	<div>
+		<div class="panel">
+			<div>
+				<ul id="titles" class="list-group">
+				</ul>
+			<span id="message" style="color:red"></span>
+			</div>
+			<button id="prev">Prev</button>Page: <span id="pageNumber"></span><button id="next">Next</button>
+			Total Elements: <span id="total"></span>
+
+		</div>
+		<div class="panel">
+			<table id="details">
+			</table>
+		</div>
+	</div>
+</div>
+<script type="text/template" id="titleTemplate">
+	<li>
+		<a href="#" id="<%-id%>" class="title"><%=name%></a>
+	</li>
+</script>
+
+<script type="text/template" id="fieldTemplate">
+	<tr>
+		<td class="field_name"><b><%-name%>:</b></td> <td><div class="text"><%=value%></div></td>
+	</tr>
+</script>
+
+<script type="text/template" id="highlightTemplate">
+	<%-text%></span>
+</script>
+
+<script>
+$(function(){
+	var titleTemplate = _.template($("#titleTemplate").html());
+	var fieldTemplate = _.template($("#fieldTemplate").html());
+	var highlightTemplate = _.template($("#highlightTemplate").html());
+	var fields = ["name", "assetCastList", "assetDirectorList", "description"];
+	var pageNumber = 1;
+	var pageSize=25;
+	var delaySearchTimeout = null;
+	
+	function reset() {
+		$("#details").empty();
+		$("#titles").empty();
+		$("#pageNumber").html(1);
+		$("#total").empty();
+		$("#message").empty();
+	}
+	
+	function highlight(str, term) {
+		var patt = new RegExp("\\b" + term, "ig");
+		var v;
+		var fragements = new Array();
+		var lastPos = 0;
+		var text;
+		while(v=patt.exec(str)) {
+			console.log(lastPos);
+			text = str.substring(lastPos, v.index);
+			fragements.push(text);
+			text = "<span class=\"highlight\">" + str.substring(v.index, v.index + term.length) + "</span>";
+			fragements.push(text);
+			lastPos = v.index + term.length;
+		}
+		fragements.push(str.substring(lastPos, str.length));
+		return fragements.join("");
+	}
+	
+	function getFullTitle(id) {
+		var term = $("#term").val();
+		$("#details").empty();
+		var url = "/solr/collection1/select?q=contextPaths%3A%22"+ id + "%22&wt=json&indent=true";
+		$.getJSON(url, function(response){
+			$.each(response.response.docs, function(index, doc){
+			
+				for(var n in fields) {
+					$("#details").append(fieldTemplate({name: fields[n], value: highlight(doc[fields[n]].toString(), term)}));
+				}
+				
+				if (doc.cat_param_nv_pair) {
+					for(var i in doc.cat_param_nv_pair) {
+						if (doc.cat_param_nv_pair[i].indexOf("posterImageURL^^")==0) {
+							var imgUrl = doc.cat_param_nv_pair[i].substring("posterImageURL^^".length);
+							$("#details").append("<td></td><td><img src=\"" + imgUrl + "\"></td>");
+						}
+					}
+				}
+			});
+		}).fail(function(){
+			console.log("fail");
+		});
+	}
+	
+	function registerEvent() {
+		$(".title").unbind("click");
+		$(".title").click(function(e){
+			$(".title").removeClass("current");
+			e.preventDefault();
+			getFullTitle(this.id);
+			$(this).addClass("current");
+		});
+	}
+	
+	function search(){
+		var term = $("#term").val();
+		console.log("searching " + term);
+		var pageNumber = $("#pageNumber").html();
+		if (isNaN(pageNumber)) {
+			pageNumber = 1;
+		}
+		var pageSize = $("#pageSize").val();
+		if (pageSize < 10) {
+			pageSize = 10;
+		}
+		var url = "/tvx/search/FullTextSearchVOD.action?deviceName=androidmobile&clientLocale=fr&pageNumber="+pageNumber+"&searchString="
+		+ term + "&basicSearch=false&pageSize=" + pageSize;
+		
+		reset();
+		$("#casLink").attr("href", url);
+		$("#casLink").html(url);
+		$.getJSON(url, function(response){
+			$("#titles").empty();
+			if (response.success) {
+				$.each(response.payload, function(index, data){	
+					data.name = highlight(data.name, term);
+					$("#titles").append(titleTemplate(data));
+				});
+				registerEvent();
+				$("#pageNumber").html(response.pageNumber);
+				$("#total").html(response.totalElements);
+				pageNumber = response.pageNumber;
+			}
+			else {
+				$("#message").html(response.errorMessage);
+			}
+		}).always(function(){
+			delaySearchTimeout = null;
+		});
+	}
+	
+	$("#search").click(search);
+	
+	$("#prev").click(function(){
+		pageNumber = $("#pageNumber").html();
+		if (pageNumber > 1) {
+			pageNumber--;
+			$("#pageNumber").html(pageNumber);
+			search();
+		}
+	});
+	
+	$("#next").click(function(){
+		var total = $("#total").html();
+		var pageSize = $("#pageSize").val();
+		
+		pageNumber = $("#pageNumber").html();
+		pageNumber++;
+		if ((pageNumber-1) * pageSize < total) { 
+			$("#pageNumber").html(pageNumber);
+			search();
+		}
+	});
+	
+	$("#term").keyup(function(e){
+		if (delaySearchTimeout != null) {
+			clearTimeout(delaySearchTimeout);
+			delaySearchTimeout = null;
+		}
+		delaySearchTimeout = setTimeout(search, 300);
+	});
+	
+	$("#term").change(function(e){
+		if ($("#term").val().trim().length == 0) {
+			reset();
+		}
+	});
+});
+</script>
